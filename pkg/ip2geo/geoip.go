@@ -1,13 +1,18 @@
-package main
+package ip2geo
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"io/ioutil"
-	"net"
 	"net/http"
-	"strings"
+	"strconv"
 )
+
+type Query struct {
+	Query string `json:"query"`
+}
 
 type GeoInfo struct {
 	Query       string  `json:"query"`
@@ -26,16 +31,21 @@ type GeoInfo struct {
 	As          string  `json:"as"`
 }
 
-func ipToGeo(addr net.Addr) (*GeoInfo, error) {
-	ip := strings.Split(addr.String(), ":")[0]
+func Lookup(q []Query, counter *prometheus.CounterVec) ([]GeoInfo, error) {
+	req, _ := json.Marshal(q)
 
-	resp, err := http.Get(fmt.Sprintf("%s%s", "https://ip-api.com/json/", ip))
+	resp, err := http.Post("http://ip-api.com/batch", "application/json", bytes.NewBuffer(req))
 	if err != nil {
 		return nil, err
 	}
 
+	counter.WithLabelValues(
+		"/batch",
+		strconv.Itoa(resp.StatusCode),
+	).Inc()
+
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("error getting geo information")
+		return nil, fmt.Errorf("error getting geo information [%d]", resp.StatusCode)
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
@@ -43,11 +53,11 @@ func ipToGeo(addr net.Addr) (*GeoInfo, error) {
 		return nil, err
 	}
 
-	var result GeoInfo
+	var result []GeoInfo
 	err = json.Unmarshal(body, &result)
 	if err != nil {
 		return nil, err
 	}
 
-	return &result, nil
+	return result, nil
 }

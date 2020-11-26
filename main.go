@@ -2,28 +2,22 @@ package main
 
 import (
 	"github.com/gliderlabs/ssh"
-	"github.com/mmcloughlin/geohash"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/jasonlvhit/gocron"
+	"github.com/jsiebens/sshoneypot/pkg/session"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 )
 
-func authHandler(c *prometheus.CounterVec) ssh.PasswordHandler {
+func authHandler(s *session.Sessions) ssh.PasswordHandler {
 	return func(ctx ssh.Context, password string) bool {
+		//log.Printf("User: %s connecting from %s with password: %s\n", ctx.User(), ctx.RemoteAddr(), password)
 
-		geo, err := ipToGeo(ctx.RemoteAddr())
-
-		if err == nil {
-			c.WithLabelValues(
-				geo.CountryCode,
-				geo.City,
-				geohash.Encode(geo.Lat, geo.Lon),
-			).Inc()
-		}
+		s.Inc(strings.Split(ctx.RemoteAddr().String(), ":")[0])
 
 		return false
 	}
@@ -35,24 +29,14 @@ func sessionHandler(s ssh.Session) {
 
 func main() {
 
-	counter := promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ssh",
-			Subsystem: "honeypot",
-			Name:      "sessions_total",
-			Help:      "A counter for sessions to the honeypot.",
-		},
-		[]string{
-			"country",
-			"city",
-			"geohash",
-		},
-	)
+	port := getenv("PORT", "2222")
 
-	s := &ssh.Server{
-		Addr:            ":2222",
+	sessions := session.NewSessions()
+
+	sshServer := &ssh.Server{
+		Addr:            ":" + port,
 		Handler:         sessionHandler,
-		PasswordHandler: authHandler(counter),
+		PasswordHandler: authHandler(sessions),
 	}
 
 	wg := sync.WaitGroup{}
@@ -60,8 +44,8 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Println("starting ssh server on port 2222...")
-		if err := s.ListenAndServe(); err != nil {
+		log.Printf("starting ssh server on port %s...\n", port)
+		if err := sshServer.ListenAndServe(); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -78,5 +62,16 @@ func main() {
 		}
 	}()
 
+	_ = gocron.Every(4).Seconds().Do(sessions.Flush)
+	gocron.Start()
+
 	wg.Wait()
+}
+
+func getenv(key, fallback string) string {
+	value := os.Getenv(key)
+	if len(value) == 0 {
+		return fallback
+	}
+	return value
 }
