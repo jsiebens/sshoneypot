@@ -29,7 +29,7 @@ func authHandler(s *prometheus.CounterVec, db *geoip2.Reader) ssh.PasswordHandle
 					record.Country.Names["en"],
 					record.Country.IsoCode,
 					record.City.Names["en"],
-					geohash.Encode(record.Location.Latitude, record.Location.Latitude),
+					geohash.Encode(record.Location.Latitude, record.Location.Longitude),
 				).Inc()
 			}
 		}

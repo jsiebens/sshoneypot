@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  release:
+    types:
+      - created
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Set up Go 1.x
+        id: go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.13
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: Build amd64
+        run: go build -o sshoneypot_amd64 .
+        env:
+          GOOS: linux
+          GOARCH: amd64
+
+      - name: Upload amd64 binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./sshoneypot_amd64
+          asset_name: sshoneypot_amd64
+          asset_content_type: application/octet-stream
