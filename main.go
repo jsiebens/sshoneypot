@@ -2,22 +2,37 @@ package main
 
 import (
 	"github.com/gliderlabs/ssh"
-	"github.com/jasonlvhit/gocron"
-	"github.com/jsiebens/sshoneypot/pkg/session"
+	"github.com/mmcloughlin/geohash"
+	"github.com/oschwald/geoip2-golang"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 )
 
-func authHandler(s *session.Sessions) ssh.PasswordHandler {
+func authHandler(s *prometheus.CounterVec, db *geoip2.Reader) ssh.PasswordHandler {
 	return func(ctx ssh.Context, password string) bool {
-		//log.Printf("User: %s connecting from %s with password: %s\n", ctx.User(), ctx.RemoteAddr(), password)
+		addr := ctx.RemoteAddr()
+		ip := net.ParseIP(strings.Split(addr.String(), ":")[0])
 
-		s.Inc(strings.Split(ctx.RemoteAddr().String(), ":")[0])
+		if ip != nil {
+			record, err := db.City(ip)
+
+			if err == nil && record.City.GeoNameID != 0 {
+				s.WithLabelValues(
+					record.Country.Names["en"],
+					record.Country.IsoCode,
+					record.City.Names["en"],
+					geohash.Encode(record.Location.Latitude, record.Location.Latitude),
+				).Inc()
+			}
+		}
 
 		return false
 	}
@@ -28,15 +43,33 @@ func sessionHandler(s ssh.Session) {
 }
 
 func main() {
+	db, err := geoip2.Open("./GeoLite2-City.mmdb")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	sessions := promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "honeypot",
+			Subsystem: "sessions",
+			Name:      "total",
+			Help:      "A sessions for sessions to the honeypot.",
+		},
+		[]string{
+			"country",
+			"code",
+			"city",
+			"geohash",
+		},
+	)
 
 	port := getenv("PORT", "2222")
-
-	sessions := session.NewSessions()
 
 	sshServer := &ssh.Server{
 		Addr:            ":" + port,
 		Handler:         sessionHandler,
-		PasswordHandler: authHandler(sessions),
+		PasswordHandler: authHandler(sessions, db),
 	}
 
 	wg := sync.WaitGroup{}
@@ -61,9 +94,6 @@ func main() {
 			log.Fatal(err)
 		}
 	}()
-
-	_ = gocron.Every(4).Seconds().Do(sessions.Flush)
-	gocron.Start()
 
 	wg.Wait()
 }
